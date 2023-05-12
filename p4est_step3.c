@@ -862,11 +862,11 @@ step3_quad_divergence (p4est_iter_volume_info_t * info, void *user_data)
 {
   p4est_quadrant_t   *q = info->quad;
   step3_data_t       *data = (step3_data_t *) q->p.user_data;
-  double user_gamma                 = 1.5; //user defined growth rate
-  double user_nu                    = 1.5; //user defined death rate
+  double user_gamma                 = 0.02; //user defined growth rate
+  double user_nu                    = 0.015; //user defined death rate
 
   data->dudt  = 0.; //user note: does this need to be initialized to 0??
-  data->dudt += user_gamma*(data->u); // add growth to dudt
+  data->dudt += user_gamma*abs(data->u); // add growth to dudt
   data->dudt += -1.0*user_nu*(data->u)*(data->u); // remove death
   
 }
