@@ -577,6 +577,11 @@ step3_write_solution (p4est_t * p4est, int timestep)
 #endif
                  NULL);         /* there is no callback for the corners between quadrants */
 
+    
+    
+  // try to add velocity data
+  //p4est_iterate (p4est, NULL, (void *) u_interp, step3_interpolate_velocity, NULL, NULL); 
+
   /* create VTK output context and set its parameters */
   context = p4est_vtk_context_new (p4est, filename);
   p4est_vtk_context_set_scale (context, 0.99);  /* quadrant at almost full scale */
@@ -600,6 +605,9 @@ step3_write_solution (p4est_t * p4est, int timestep)
   /* write one scalar field: the solution value */
   context = p4est_vtk_write_point_dataf (context, 1, 0, /* write no vector fields */
                                          "solution", u_interp, context);        /* mark the end of the variable cell data. */
+
+  //context = p4est_vtk_write_point_dataf(context, 0, 1, "velocity", ???, context);
+
   SC_CHECK_ABORT (context != NULL,
                   P4EST_STRING "_vtk: Error writing cell data");
 
