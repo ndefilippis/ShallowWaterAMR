@@ -1292,7 +1292,7 @@ step3_compute_vmax (p4est_iter_volume_info_t * info, void *user_data)
   determine_velocity(x, v, NULL);
 
   for(int i = 0; i < P4EST_DIM; i++){
-    vmax[i] = SC_MAX(v[i], vmax[i]);
+    vmax[i] = SC_MAX(abs(v[i]), vmax[i]);
   }
 }
 
