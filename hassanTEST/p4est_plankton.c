@@ -92,6 +92,14 @@ typedef struct step3_data
   double              u;             /**< the state variable */
   double              du[P4EST_DIM]; /**< the spatial derivatives */
   double              dudt;          /**< the time derivative */
+  
+  double              u2;               /* zooplankton */
+  double              du2[P4EST_DIM];
+  double              du2dt;
+  
+  double              u3;
+  double              du3[P4EST_DIM];   /* nutrients */
+  double              du3dt;
 }
 step3_data_t;
 
@@ -109,18 +117,45 @@ typedef struct step3_ctx
                                                Gaussian bump */
   double              max_err;            /**< maximum allowed global
                                                interpolation error */
-  double              v[P4EST_DIM];       /**< the advection velocity */
   int                 refine_period;      /**< the number of time steps
                                                between mesh refinement */
   int                 repartition_period; /**< the number of time steps
                                                between repartitioning */
   int                 write_period;       /**< the number of time steps
                                                between writing vtk files */
+  double              v_max[P4EST_DIM];   // maximum velocity found
   double              current_time;       /**< the current time */
   int                 time_step;          /**< current time step
                                                counted from the first start. */
 }
 step3_ctx_t;
+
+
+static void determine_velocity(double* x, double* v, step3_ctx_t* ctx) {
+  double time = 0;
+  if(ctx) {
+    time = ctx->current_time;
+  }
+  int N = 4;
+  double U[4] = {1, 1, 1, 1};
+  double k1[4] = {0.5, 0, 1, 1};
+  double k2[4] = {0, 0.5, 1, -1};
+  double theta[4] = {0.2, 0.5, 3.1, 1.5};
+  double multiplier[4] = {1443, 9023, 4354, 34301};
+
+  int time_step = (int) (time * 32);
+  for(int i = 0; i < N; i++) {
+    theta[i] = time_step * multiplier[i] + theta[i];
+  }
+
+  v[0] = 0;
+  v[1] = 0;
+  for (int i = 0; i < N; i++) {
+    v[0] +=  U[i]*k1[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
+    v[1] += -U[i]*k2[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
+  }
+  return;
+}
 
 /** Compute the value and derivatives of the initial condition.
  *
@@ -131,7 +166,8 @@ step3_ctx_t;
  * \return the initial condition at \a x
  */
 static double
-step3_initial_condition (double x[], double du[], step3_ctx_t * ctx)
+step3_initial_condition (double x[], double du[], double du2[], double du3[],
+                         dstep3_ctx_t * ctx)
 {
   int                 i;
   double             *c = ctx->center;
@@ -151,9 +187,10 @@ step3_initial_condition (double x[], double du[], step3_ctx_t * ctx)
   if (du) {
     for (i = 0; i < P4EST_DIM; i++) {
       du[i] = -(1. / bump_width / bump_width) * d[i] * retval;
+      du2[i] = 0;
+      du3[i] = 0;
     }
   }
-
   return retval;
 }
 
@@ -199,7 +236,10 @@ step3_init_initial_condition (p4est_t * p4est, p4est_topidx_t which_tree,
 
   step3_get_midpoint (p4est, which_tree, q, midpoint);
   /* initialize the data */
-  data->u = step3_initial_condition (midpoint, data->du, ctx);
+  data->u2 = 0; // initial zooplankton
+  data->u3 = 10; // initial nutrients
+  data->u = step3_initial_condition (midpoint, data->du, data->du2,
+                                     data->du3, ctx); // does other derivatives
 }
 
 /** Estimate the square of the approximation error on a quadrant.
@@ -421,6 +461,7 @@ step3_coarsen_err_estimate (p4est_t * p4est,
  *                            coarsened.
  * \param [in,out] incoming   quadrants whose data are initialized.
  */
+ // hassan: tripled up for the three fields
 static void
 step3_replace_quads (p4est_t * p4est, p4est_topidx_t which_tree,
                      int num_outgoing,
@@ -436,18 +477,28 @@ step3_replace_quads (p4est_t * p4est, p4est_topidx_t which_tree,
     /* this is coarsening */
     parent_data = (step3_data_t *) incoming[0]->p.user_data;
     parent_data->u = 0.;
+    parent_data->u2 = 0.;
+    parent_data->u3 = 0.;
     for (j = 0; j < P4EST_DIM; j++) {
       parent_data->du[j] = step3_invalid;
+      parent_data->du2[j] = step3_invalid;
+      parent_data->du3[j] = step3_invalid;
 
     }
     for (i = 0; i < P4EST_CHILDREN; i++) {
       child_data = (step3_data_t *) outgoing[i]->p.user_data;
       parent_data->u += child_data->u / P4EST_CHILDREN;
+      parent_data->u2 += child_data->u2 / P4EST_CHILDREN;
+      parent_data->u3 += child_data->u3 / P4EST_CHILDREN;
       for (j = 0; j < P4EST_DIM; j++) {
         du_old = parent_data->du[j];
         du_est = child_data->du[j];
+        du2_old = parent_data->du2[j];
+        du2_est = child_data->du2[j];
+        du3_old = parent_data->du3[j];
+        du3_est = child_data->du3[j];
 
-        if (du_old == du_old) {
+        if (du_old == du_old) {                                // ONCE
           if (du_est * du_old >= 0.) {
             if (fabs (du_est) < fabs (du_old)) {
               parent_data->du[j] = du_est;
@@ -460,6 +511,35 @@ step3_replace_quads (p4est_t * p4est, p4est_topidx_t which_tree,
         else {
           parent_data->du[j] = du_est;
         }
+        
+        if (du2_old == du2_old) {                                // TWICE
+          if (du2_est * du2_old >= 0.) {
+            if (fabs (du2_est) < fabs (du2_old)) {
+              parent_data->du2[j] = du2_est;
+            }
+          }
+          else {
+            parent_data->du2[j] = 0.;
+          }
+        }
+        else {
+          parent_data->du2[j] = du_est;
+        }
+        
+        if (du3_old == du3_old) {                                // THRICE
+          if (du3_est * du3_old >= 0.) {
+            if (fabs (du3_est) < fabs (du3_old)) {
+              parent_data->du3[j] = du3_est;
+            }
+          }
+          else {
+            parent_data->du3[j] = 0.;
+          }
+        }
+        else {
+          parent_data->du3[j] = du3_est;
+        }
+
       }
     }
   }
@@ -472,11 +552,20 @@ step3_replace_quads (p4est_t * p4est, p4est_topidx_t which_tree,
 
     for (i = 0; i < P4EST_CHILDREN; i++) {
       child_data = (step3_data_t *) incoming[i]->p.user_data;
-      child_data->u = parent_data->u;
+      child_data->u = parent_data->u;     // once
+      child_data->u2 = parent_data->u2;   // twice
+      child_data->u3 = parent_data->u3;   // thrice
       for (j = 0; j < P4EST_DIM; j++) {
-        child_data->du[j] = parent_data->du[j];
+        child_data->du[j] = parent_data->du[j];     // once
         child_data->u +=
           (h / 4.) * parent_data->du[j] * ((i & (1 << j)) ? 1. : -1);
+        child_data->du2[j] = parent_data->du2[j];     // twice
+        child_data->u2 +=
+          (h / 4.) * parent_data->du2[j] * ((i & (1 << j)) ? 1. : -1);
+        child_data->du3[j] = parent_data->du3[j];     // thrice
+        child_data->u3 +=
+          (h / 4.) * parent_data->du3[j] * ((i & (1 << j)) ? 1. : -1);
+
       }
     }
   }
@@ -502,7 +591,7 @@ step3_replace_quads (p4est_t * p4est, p4est_topidx_t which_tree,
  *                           described by \a info are written during the
  *                           execution of the callback.
  */
-static void
+static void           // ONCE
 step3_interpolate_solution (p4est_iter_volume_info_t * info, void *user_data)
 {
   sc_array_t         *u_interp = (sc_array_t *) user_data;      /* we passed the array of values to fill as the user_data in the call to p4est_iterate */
@@ -538,8 +627,82 @@ step3_interpolate_solution (p4est_iter_volume_info_t * info, void *user_data)
     this_u_ptr = (double *) sc_array_index (u_interp, arrayoffset + i);
     this_u_ptr[0] = this_u;
   }
-
 }
+static void                 // TWICE
+step3_interpolate_solution2 (p4est_iter_volume_info_t * info, void *user_data)
+{
+  sc_array_t         *u2_interp = (sc_array_t *) user_data;      /* we passed the array of values to fill as the user_data in the call to p4est_iterate */
+  p4est_t            *p4est = info->p4est;
+  p4est_quadrant_t   *q = info->quad;
+  p4est_topidx_t      which_tree = info->treeid;
+  p4est_locidx_t      local_id = info->quadid;  /* this is the index of q *within its tree's numbering*.  We want to convert it its index for all the quadrants on this process, which we do below */
+  p4est_tree_t       *tree;
+  step3_data_t       *data = (step3_data_t *) q->p.user_data;
+  double              h;
+  p4est_locidx_t      arrayoffset;
+  double              this_u;
+  double             *this_u_ptr;
+  int                 i, j;
+
+  tree = p4est_tree_array_index (p4est->trees, which_tree);
+  local_id += tree->quadrants_offset;   /* now the id is relative to the MPI process */
+  arrayoffset = P4EST_CHILDREN * local_id;      /* each local quadrant has 2^d (P4EST_CHILDREN) values in u_interp */
+  h = (double) P4EST_QUADRANT_LEN (q->level) / (double) P4EST_ROOT_LEN;
+
+  for (i = 0; i < P4EST_CHILDREN; i++) {
+    this_u = data->u2;
+    /* loop over the derivative components and linearly interpolate from the
+     * midpoint to the corners */
+    for (j = 0; j < P4EST_DIM; j++) {
+      /* In order to know whether the direction from the midpoint to the corner is
+       * negative or positive, we take advantage of the fact that the corners
+       * are in z-order.  If i is an odd number, it is on the +x side; if it
+       * is even, it is on the -x side.  If (i / 2) is an odd number, it is on
+       * the +y side, etc. */
+      this_u += (h / 2) * data->du2[j] * ((i & (1 << j)) ? 1. : -1.);
+    }
+    this_u_ptr = (double *) sc_array_index (u2_interp, arrayoffset + i);
+    this_u_ptr[0] = this_u;
+  }
+}
+static void             // THRICE
+step3_interpolate_solution3 (p4est_iter_volume_info_t * info, void *user_data)
+{
+  sc_array_t         *u3_interp = (sc_array_t *) user_data;      /* we passed the array of values to fill as the user_data in the call to p4est_iterate */
+  p4est_t            *p4est = info->p4est;
+  p4est_quadrant_t   *q = info->quad;
+  p4est_topidx_t      which_tree = info->treeid;
+  p4est_locidx_t      local_id = info->quadid;  /* this is the index of q *within its tree's numbering*.  We want to convert it its index for all the quadrants on this process, which we do below */
+  p4est_tree_t       *tree;
+  step3_data_t       *data = (step3_data_t *) q->p.user_data;
+  double              h;
+  p4est_locidx_t      arrayoffset;
+  double              this_u;
+  double             *this_u_ptr;
+  int                 i, j;
+
+  tree = p4est_tree_array_index (p4est->trees, which_tree);
+  local_id += tree->quadrants_offset;   /* now the id is relative to the MPI process */
+  arrayoffset = P4EST_CHILDREN * local_id;      /* each local quadrant has 2^d (P4EST_CHILDREN) values in u_interp */
+  h = (double) P4EST_QUADRANT_LEN (q->level) / (double) P4EST_ROOT_LEN;
+
+  for (i = 0; i < P4EST_CHILDREN; i++) {
+    this_u = data->u3;
+    /* loop over the derivative components and linearly interpolate from the
+     * midpoint to the corners */
+    for (j = 0; j < P4EST_DIM; j++) {
+      /* In order to know whether the direction from the midpoint to the corner is
+       * negative or positive, we take advantage of the fact that the corners
+       * are in z-order.  If i is an odd number, it is on the +x side; if it
+       * is even, it is on the -x side.  If (i / 2) is an odd number, it is on
+       * the +y side, etc. */
+      this_u += (h / 2) * data->du[j] * ((i & (1 << j)) ? 1. : -1.);
+    }
+    this_u_ptr = (double *) sc_array_index (u3_interp, arrayoffset + i);
+    this_u_ptr[0] = this_u;
+  }
+}
+
 
 /** Write the state variable to vtk format, one file per process.
  *
@@ -552,16 +715,20 @@ step3_write_solution (p4est_t * p4est, int timestep)
   char                filename[BUFSIZ] = "";
   int                 retval;
   sc_array_t         *u_interp;
+  sc_array_t         *v_interp;
   p4est_locidx_t      numquads;
   p4est_vtk_context_t *context;
 
-  snprintf (filename, BUFSIZ, P4EST_STRING "_step3_%04d", timestep);
+  snprintf (filename, BUFSIZ, "step3_result/" P4EST_STRING "_step3_%04d", timestep);
 
   numquads = p4est->local_num_quadrants;
 
   /* create a vector with one value for the corner of every local quadrant
    * (the number of children is always the same as the number of corners) */
   u_interp = sc_array_new_size (sizeof (double), numquads * P4EST_CHILDREN);
+  u2_interp = sc_array_new_size (sizeof (double), numquads * P4EST_CHILDREN);
+  u3_interp = sc_array_new_size (sizeof (double), numquads * P4EST_CHILDREN);
+  v_interp = sc_array_new_size (sizeof (double), 2 * numquads * P4EST_CHILDREN);
 
   /* Use the iterator to visit every cell and fill in the solution values.
    * Using the iterator is not absolutely necessary in this case: we could
@@ -575,7 +742,27 @@ step3_write_solution (p4est_t * p4est, int timestep)
 #ifdef P4_TO_P8
                  NULL,          /* there is no callback for the edges between quadrants */
 #endif
+                 NULL);         /* there is no callback for the corners between quadrants */  
+  p4est_iterate (p4est, NULL,   /* we don't need any ghost quadrants for this loop */
+                 (void *) u2_interp,     /* pass in u_interp so that we can fill it */
+                 step3_interpolate_solution2,    /* callback function that interpolates from the cell center to the cell corners, defined above */
+                 NULL,          /* there is no callback for the faces between quadrants */
+#ifdef P4_TO_P8
+                 NULL,          /* there is no callback for the edges between quadrants */
+#endif
+                 NULL);         /* there is no callback for the corners between quadrants */  
+  p4est_iterate (p4est, NULL,   /* we don't need any ghost quadrants for this loop */
+                 (void *) u3_interp,     /* pass in u_interp so that we can fill it */
+                 step3_interpolate_solution3,    /* callback function that interpolates from the cell center to the cell corners, defined above */
+                 NULL,          /* there is no callback for the faces between quadrants */
+#ifdef P4_TO_P8
+                 NULL,          /* there is no callback for the edges between quadrants */
+#endif
                  NULL);         /* there is no callback for the corners between quadrants */
+
+
+  // try to add velocity data
+  //p4est_iterate (p4est, NULL, (void *) v_interp, step3_interpolate_velocity, NULL, NULL); 
 
   /* create VTK output context and set its parameters */
   context = p4est_vtk_context_new (p4est, filename);
@@ -599,7 +786,13 @@ step3_write_solution (p4est_t * p4est, int timestep)
 
   /* write one scalar field: the solution value */
   context = p4est_vtk_write_point_dataf (context, 1, 0, /* write no vector fields */
-                                         "solution", u_interp, context);        /* mark the end of the variable cell data. */
+                                         "plankton", u_interp,
+                                         "zooplankton", u2_interp,
+                                         "nutrients", u3_interp,
+                                          context);        /* mark the end of the variable cell data. */
+
+  //context = p4est_vtk_write_point_dataf(context, 0, 1, "velocity", ???, context);
+
   SC_CHECK_ABORT (context != NULL,
                   P4EST_STRING "_vtk: Error writing cell data");
 
@@ -607,6 +800,7 @@ step3_write_solution (p4est_t * p4est, int timestep)
   SC_CHECK_ABORT (!retval, P4EST_STRING "_vtk: Error writing footer");
 
   sc_array_destroy (u_interp);
+  sc_array_destroy (v_interp);
 }
 
 #ifdef P4EST_ENABLE_FILE_DEPRECATED
@@ -856,18 +1050,32 @@ step3_restart (const char *filename, sc_MPI_Comm mpicomm, double time_inc)
  * \param [in] info          the information about the quadrant populated by
  *                           p4est_iterate()
  * \param [in] user_data     not used
+ *
+ * important to call this before upwind_flux in p4est_iterate
  */
 static void
 step3_quad_divergence (p4est_iter_volume_info_t * info, void *user_data)
 {
   p4est_quadrant_t   *q = info->quad;
   step3_data_t       *data = (step3_data_t *) q->p.user_data;
-  user_gamma                 = 1.5; //user defined growth rate
-  user_nu                    = 1.5; //user defined death rate
+  double user_gamma                 = 0.02; //user defined growth rate
+  double user_nu                    = 0.015; //user defined death rate
+  double user_mu                    = 1;    // nutrient uptake rate
+  double user_k                     = 5;    // nutrient max uptake loc.
+  double user_tau                   = 1;    // nutrient restore timescale
+  double user_star                  = 10;   // nutrient restore value
 
-  data->dudt  = 0.; //user note: does this need to be initialized to 0??
-  data->dudt += user_gamma*(data->u); // add growth to dudt
-  data_>dudt += -1.0*user_nu*(data->u)*(data->u); // remove death
+  data->du2dt  = 0.; //user note: does this need to be initialized to 0??
+  data->du2dt += user_gamma*abs(data->u2)*(data->u); // z grow
+  data->du2dt += -1.0*user_nu*(data->u2)*(data->u2); // z die
+  
+  data->dudt  = 0.;
+  data->dudt += user_mu*(data->u3)*(data->u)/((data->u3)+user_k)// p grow
+  data->dudt += -1.0*user_gamma*abs(data->u2)*(data->u); // p die
+  
+  data->du3dt  = 0.;
+  data->du3dt += ((data->u3)-user_star)/user_tau; // n grow
+  data->du3dt += -1.*user_mu*(data->u3)*(data->u)/((data->u3)+user_k) // n die
   
 }
 
@@ -890,7 +1098,8 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
 {
   int                 i, j;
   p4est_t            *p4est = info->p4est;
-  step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
+  //double             *coordinates = info->
+  // step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
   step3_data_t       *ghost_data = (step3_data_t *) user_data;
   step3_data_t       *udata;
   p4est_quadrant_t   *quad;
@@ -898,9 +1107,12 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   double              uavg;
   double              q;
   double              h, facearea;
+  double              x[3];
+  double              u[2];
   int                 which_face;
   int                 upwindside;
   p4est_iter_face_side_t *side[2];
+  p4est_iter_face_side_t *full_side;
   sc_array_t         *sides = &(info->sides);
 
   /* because there are no boundaries, every face has two sides */
@@ -909,30 +1121,57 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   side[0] = p4est_iter_fside_array_index_int (sides, 0);
   side[1] = p4est_iter_fside_array_index_int (sides, 1);
 
-  /* which of the quadrant's faces the interface touches */
-  which_face = side[0]->face;
+  
 
+  full_side = side[0];
+  if(side[0]->is_hanging) full_side = side[1];
+
+  #ifndef P4_TO_P8
+    quad = full_side->is.full.quad;
+    p4est_qcoord_t length = P4EST_QUADRANT_LEN (quad->level);
+    p4est_qcoord_t dx = 0, dy = 0;
+    which_face = full_side->face;
+    switch(which_face) {
+      case 0:
+        dx = 0;
+        dy = length / 2;
+        break;
+      case 1:
+        dx = length;
+        dy = length / 2;
+        break;
+      case 2:
+        dx = length / 2;
+        dy = 0;
+        break;
+      case 3:
+        dx = length / 2;
+        dy = length;
+        break;
+    }
+ 
+    p4est_qcoord_to_vertex (p4est->connectivity, full_side->treeid, quad->x + dx, quad->y + dy, x);
+  #else
+    // 3D not implemented
+  #endif
+
+  determine_velocity(x, u, ctx);
+
+  /* which of the quadrant's faces the interface touches */  
+  which_face = side[0]->face;
   switch (which_face) {
   case 0:                      /* -x side */
-    vdotn = -ctx->v[0];
+    vdotn = -u[0];
     break;
   case 1:                      /* +x side */
-    vdotn = ctx->v[0];
+    vdotn = u[0];
     break;
   case 2:                      /* -y side */
-    vdotn = -ctx->v[1];
+    vdotn = -u[1];
     break;
   case 3:                      /* +y side */
-    vdotn = ctx->v[1];
+    vdotn = u[1];
     break;
-#ifdef P4_TO_P8
-  case 4:                      /* -z side */
-    vdotn = -ctx->v[2];
-    break;
-  case 5:                      /* +z side */
-    vdotn = ctx->v[2];
-    break;
-#endif
   }
   upwindside = vdotn >= 0. ? 0 : 1;
 
@@ -955,9 +1194,13 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
         udata =
           (step3_data_t *) side[upwindside]->is.hanging.quad[j]->p.user_data;
       }
-      uavg += udata->u;
+      uavg += udata->u;     //once
+      uavg2 += udata->u2;   //twice
+      uavg3 += udata->u3;   //thrice
     }
-    uavg /= P4EST_HALF;
+    uavg /= P4EST_HALF;     //once
+    uavg2 /= P4EST_HALF;     //twice
+    uavg2 /= P4EST_HALF;     //thrice
   }
   else {
     if (side[upwindside]->is.full.is_ghost) {
@@ -966,10 +1209,14 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
     else {
       udata = (step3_data_t *) side[upwindside]->is.full.quad->p.user_data;
     }
-    uavg = udata->u;
+    uavg = udata->u;      //once
+    uavg2 = udata->u2;    //twice
+    uavg3 = udata->u3;    //thrice
   }
   /* flux from side 0 to side 1 */
-  q = vdotn * uavg;
+  q = vdotn * uavg;       //once
+  q2 = vdotn * uavg2;     //twice
+  q3 = vdotn * uavg3;     //thrice
   for (i = 0; i < 2; i++) {
     if (side[i]->is_hanging) {
       /* there are 2^(d-1) (P4EST_HALF) subfaces */
@@ -985,10 +1232,14 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
         if (!side[i]->is.hanging.is_ghost[j]) {
           udata = (step3_data_t *) quad->p.user_data;
           if (i == upwindside) {
-            udata->dudt += vdotn * udata->u * facearea * (i ? 1. : -1.);
+            udata->dudt += vdotn * udata->u * facearea * (i ? 1. : -1.); // once
+            udata->du2dt += vdotn * udata->u2 * facearea * (i ? 1. : -1.); //twice
+            udata->du3dt += vdotn * udata->u3 * facearea * (i ? 1. : -1.); //thrice
           }
           else {
-            udata->dudt += q * facearea * (i ? 1. : -1.);
+            udata->dudt += q * facearea * (i ? 1. : -1.);    //once
+            udata->du2dt += q2 * facearea * (i ? 1. : -1.);  //twice
+            udata->du3dt += q3 * facearea * (i ? 1. : -1.);  //thrice
           }
         }
       }
@@ -1003,7 +1254,9 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
 #endif
       if (!side[i]->is.full.is_ghost) {
         udata = (step3_data_t *) quad->p.user_data;
-        udata->dudt += q * facearea * (i ? 1. : -1.);
+        udata->dudt += q * facearea * (i ? 1. : -1.);     //once 
+        udata->du2dt += q2 * facearea * (i ? 1. : -1.);   //twice
+        udata->du3dt += q3 * facearea * (i ? 1. : -1.);   //thrice
       }
     }
   }
@@ -1041,7 +1294,9 @@ step3_timestep_update (p4est_iter_volume_info_t * info, void *user_data)
   vol = h * h;
 #endif
 
-  data->u += dt * data->dudt / vol;
+  data->u += dt * data->dudt / vol;         // once
+  data->u2 += dt * data->du2dt / vol;       // twice
+  data->u3 += dt * data->du3dt / vol;       // thrice
 }
 
 /** Reset the approximate derivatives.
@@ -1067,7 +1322,9 @@ step3_reset_derivatives (p4est_iter_volume_info_t * info, void *user_data)
   int                 j;
 
   for (j = 0; j < P4EST_DIM; j++) {
-    data->du[j] = step3_invalid;
+    data->du[j] = step3_invalid;        // once
+    data->du2[j] = step3_invalid;       // twice
+    data->du3[j] = step3_invalid;       // thrice
   }
 }
 
@@ -1211,6 +1468,23 @@ step3_compute_max (p4est_iter_volume_info_t * info, void *user_data)
   *((double *) user_data) = umax;
 }
 
+static void
+step3_compute_vmax (p4est_iter_volume_info_t * info, void *user_data)
+{
+  p4est_quadrant_t   *q = info->quad;
+  double             *vmax = (double *) user_data;
+
+  double v[P4EST_DIM];
+  double x[P4EST_DIM];
+
+  step3_get_midpoint(info->p4est, info->treeid, q, x);
+  determine_velocity(x, v, NULL);
+
+  for(int i = 0; i < P4EST_DIM; i++){
+    vmax[i] = SC_MAX(v[i], vmax[i]);
+  }
+}
+
 /** Compute the timestep.
  *
  * Find the smallest quadrant and scale the timestep based on that length and
@@ -1250,10 +1524,9 @@ step3_get_timestep (p4est_t * p4est)
 
   vnorm = 0;
   for (i = 0; i < P4EST_DIM; i++) {
-    vnorm += ctx->v[i] * ctx->v[i];
+    vnorm += ctx->v_max[i] * ctx->v_max[i];
   }
   vnorm = sqrt (vnorm);
-
   dt = min_h / 2. / vnorm;
 
   return dt;
@@ -1453,17 +1726,10 @@ step3_run (sc_MPI_Comm mpicomm)
   ctx.max_err = 2.e-2;
   ctx.center[0] = 0.5;
   ctx.center[1] = 0.5;
+  ctx.v_max[0] = 1;
+  ctx.v_max[1] = 1;
 #ifdef P4_TO_P8
   ctx.center[2] = 0.5;
-#endif
-#ifndef P4_TO_P8
-  /* randomly chosen advection direction */
-  ctx.v[0] = -0.445868402501118;
-  ctx.v[1] = -0.895098523991131;
-#else
-  ctx.v[0] = 0.485191768970225;
-  ctx.v[1] = -0.427996381877778;
-  ctx.v[2] = 0.762501176669961;
 #endif
   ctx.refine_period = 2;
   ctx.repartition_period = 4;
@@ -1488,6 +1754,26 @@ step3_run (sc_MPI_Comm mpicomm)
                          (void *) (&ctx));              /* context */
   /* *INDENT-ON* */
 
+  double vmax[P4EST_DIM];
+  double global_vmax[P4EST_DIM];
+  for (int i = 0; i < P4EST_DIM; i++) vmax[i] = 0.;
+   
+  /* initialize derivative estimates */
+        p4est_iterate (p4est, NULL, (void *) &vmax,
+                       step3_compute_vmax,       
+                       NULL,    /* there is no callback for the faces between quadrants */
+#ifdef P4_TO_P8
+                       NULL,    /* there is no callback for the edges between quadrants */
+#endif
+                       NULL);   /* there is no callback for the corners between quadrants */
+
+  int mpiret =
+    sc_MPI_Allreduce (&vmax, &global_vmax, P4EST_DIM, sc_MPI_DOUBLE, sc_MPI_MAX,
+                      p4est->mpicomm);
+  SC_CHECK_MPI (mpiret);
+  for(int i = 0; i < P4EST_DIM; i++) ctx.v_max[i] = global_vmax[i];
+  P4EST_GLOBAL_PRODUCTIONF ("v_max %f, %f\n", global_vmax[0], global_vmax[1]);
+
   /* refine and coarsen based on an interpolation error estimate */
   recursive = 1;
   p4est_refine (p4est, recursive, step3_refine_err_estimate,
@@ -1505,9 +1791,8 @@ step3_run (sc_MPI_Comm mpicomm)
    * neighbors across edges or corners as well; see p4est.h. */
   p4est_balance (p4est, P4EST_CONNECT_FACE, step3_init_initial_condition);
   p4est_partition (p4est, partforcoarsen, NULL);
-
   /* time step */
-  step3_timestep (p4est, 0., 0.1);
+  step3_timestep (p4est, 0., 0.5);
 
   /* Destroy the p4est and the connectivity structure. */
   p4est_destroy (p4est);
