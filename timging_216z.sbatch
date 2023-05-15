@@ -13,4 +13,4 @@ module load intel/19.1.2 openmpi/intel/4.1.1
 
 #make
 cd /scratch/sd3201/p4est-2.8.5.5-9ddbb/example/steps
-mpirun -np 8 p4est_step3
+mpirun -np 12 p4est_step3
