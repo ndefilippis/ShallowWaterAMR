@@ -2,9 +2,9 @@
 
 #SBATCH --job-name=timging_1
 #SBATCH --nodes=2
-#SBATCH --tasks-per-node=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=4GB 
+#SBATCH --tasks-per-node=4
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16GB 
 #SBATCH --time=01:00:00 
 #SBATCH --verbose
 
