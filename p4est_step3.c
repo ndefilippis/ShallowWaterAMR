@@ -928,7 +928,7 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   int                 i, j;
   p4est_t            *p4est = info->p4est;
   //double             *coordinates = info->
-  // step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
+  step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
   step3_data_t       *ghost_data = (step3_data_t *) user_data;
   step3_data_t       *udata;
   p4est_quadrant_t   *quad;
