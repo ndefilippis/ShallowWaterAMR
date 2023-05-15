@@ -933,7 +933,7 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   int                 i, j;
   p4est_t            *p4est = info->p4est;
   //double             *coordinates = info->
-  step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
+  // step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
   step3_data_t       *ghost_data = (step3_data_t *) user_data;
   step3_data_t       *udata;
   p4est_quadrant_t   *quad;
@@ -960,30 +960,34 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   full_side = side[0];
   if(side[0]->is_hanging) full_side = side[1];
 
-  quad = full_side->is.full.quad;
-  p4est_qcoord_t length = P4EST_QUADRANT_LEN (quad->level);
-  p4est_qcoord_t dx = 0, dy = 0;
-  which_face = full_side->face;
-  switch(which_face) {
-    case 0:
-      dx = 0;
-      dy = length / 2;
-      break;
-    case 1:
-      dx = length;
-      dy = length / 2;
-      break;
-    case 2:
-      dx = length / 2;
-      dy = 0;
-      break;
-    case 3:
-      dx = length / 2;
-      dy = length;
-      break;
-  }
-  
-  p4est_qcoord_to_vertex (p4est->connectivity, full_side->treeid, quad->x + dx, quad->y + dy, x);
+  #ifndef P4_TO_P8
+    quad = full_side->is.full.quad;
+    p4est_qcoord_t length = P4EST_QUADRANT_LEN (quad->level);
+    p4est_qcoord_t dx = 0, dy = 0;
+    which_face = full_side->face;
+    switch(which_face) {
+      case 0:
+        dx = 0;
+        dy = length / 2;
+        break;
+      case 1:
+        dx = length;
+        dy = length / 2;
+        break;
+      case 2:
+        dx = length / 2;
+        dy = 0;
+        break;
+      case 3:
+        dx = length / 2;
+        dy = length;
+        break;
+    }
+ 
+    p4est_qcoord_to_vertex (p4est->connectivity, full_side->treeid, quad->x + dx, quad->y + dy, x);
+  #else
+    // 3D not implemented
+  #endif
 
   determine_velocity(x, u);
 
