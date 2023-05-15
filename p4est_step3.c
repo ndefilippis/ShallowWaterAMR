@@ -90,8 +90,6 @@ static int          step3_checkpoint = 0;
 typedef struct step3_data
 {
   double              u;             /**< the state variable */
-  double              x[P4EST_DIM];  // coordinates of midpoint of quadrant 
-  double              v[P4EST_DIM];  // spatially varying velocity
   double              du[P4EST_DIM]; /**< the spatial derivatives */
   double              dudt;          /**< the time derivative */
 }
@@ -111,18 +109,45 @@ typedef struct step3_ctx
                                                Gaussian bump */
   double              max_err;            /**< maximum allowed global
                                                interpolation error */
-  double              v[P4EST_DIM];       /**< the advection velocity */
   int                 refine_period;      /**< the number of time steps
                                                between mesh refinement */
   int                 repartition_period; /**< the number of time steps
                                                between repartitioning */
   int                 write_period;       /**< the number of time steps
                                                between writing vtk files */
+  double              v_max[P4EST_DIM];   // maximum velocity found
   double              current_time;       /**< the current time */
   int                 time_step;          /**< current time step
                                                counted from the first start. */
 }
 step3_ctx_t;
+
+
+static void determine_velocity(double* x, double* v, step3_ctx_t* ctx) {
+  double time = 0;
+  if(ctx) {
+    time = ctx->current_time;
+  }
+  int N = 4;
+  double U[4] = {1, 1, 1, 1};
+  double k1[4] = {0.5, 0, 1, 1};
+  double k2[4] = {0, 0.5, 1, -1};
+  double theta[4] = {0.2, 0.5, 3.1, 1.5};
+  double multiplier[4] = {1443, 9023, 4354, 34301};
+
+  int time_step = (int) (time * 32);
+  for(int i = 0; i < N; i++) {
+    theta[i] = time_step * multiplier[i] + theta[i];
+  }
+
+  v[0] = 0;
+  v[1] = 0;
+  for (int i = 0; i < N; i++) {
+    v[0] +=  U[i]*k1[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
+    v[1] += -U[i]*k2[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
+  }
+  return;
+}
 
 /** Compute the value and derivatives of the initial condition.
  *
@@ -133,7 +158,7 @@ step3_ctx_t;
  * \return the initial condition at \a x
  */
 static double
-step3_initial_condition (double x[], double x_out[], double du[], double v[], step3_ctx_t * ctx)
+step3_initial_condition (double x[], double du[], step3_ctx_t * ctx)
 {
   int                 i;
   double             *c = ctx->center;
@@ -155,20 +180,6 @@ step3_initial_condition (double x[], double x_out[], double du[], double v[], st
       du[i] = -(1. / bump_width / bump_width) * d[i] * retval;
     }
   }
-
-  // circular flow, u = y, v = -x
-  if(v) {
-    v[0] = x[1];
-    v[1] = -x[0];
-  }
-
-  if(x_out) {
-    for (i = 0; i < P4EST_DIM; i++) {
-      x_out[i] = x[i];
-    }
-  }
-  //printf("%f\n", x_out[0]);
-
   return retval;
 }
 
@@ -214,7 +225,7 @@ step3_init_initial_condition (p4est_t * p4est, p4est_topidx_t which_tree,
 
   step3_get_midpoint (p4est, which_tree, q, midpoint);
   /* initialize the data */
-  data->u = step3_initial_condition (midpoint, data->x, data->du, data->v, ctx);
+  data->u = step3_initial_condition (midpoint, data->du, ctx);
 }
 
 /** Estimate the square of the approximation error on a quadrant.
@@ -325,7 +336,7 @@ step3_coarsen_initial_condition (p4est_t * p4est,
   /* get the parent of the first child (the parent of all children) */
   p4est_quadrant_parent (children[0], &parent);
   step3_get_midpoint (p4est, which_tree, &parent, parentmidpoint);
-  parentdata.u = step3_initial_condition (parentmidpoint, parentdata.x, parentdata.du, parentdata.v, ctx);
+  parentdata.u = step3_initial_condition (parentmidpoint, parentdata.du, ctx);
   h = (double) P4EST_QUADRANT_LEN (parent.level) / (double) P4EST_ROOT_LEN;
   /* the quadrant's volume is also its volume fraction */
 #ifdef P4_TO_P8
@@ -897,22 +908,6 @@ step3_quad_divergence (p4est_iter_volume_info_t * info, void *user_data)
   
 }
 
-static void determine_velocity(double* x, double* v) {
-  int N = 4;
-  double U[4] = {1, 1, 1, 1};
-  double k1[4] = {0.5, 0, 1, 1};
-  double k2[4] = {0, 0.5, 1, -1};
-  double theta[4] = {0.2, 0.5, 3.1, 1.5};
-
-  v[0] = 0;
-  v[1] = 0;
-  for (int i = 0; i < N; i++) {
-    v[0] +=  U[i]*k1[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
-    v[1] += -U[i]*k2[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
-  }
-  return;
-}
-
 /** Approximate the flux across a boundary between quadrants.
  *
  * We use a very simple upwind numerical flux.
@@ -985,7 +980,7 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   
   p4est_qcoord_to_vertex (p4est->connectivity, full_side->treeid, quad->x + dx, quad->y + dy, x);
 
-  determine_velocity(x, u);
+  determine_velocity(x, u, ctx);
 
   /* which of the quadrant's faces the interface touches */  
   which_face = side[0]->face;
@@ -1280,6 +1275,23 @@ step3_compute_max (p4est_iter_volume_info_t * info, void *user_data)
   *((double *) user_data) = umax;
 }
 
+static void
+step3_compute_vmax (p4est_iter_volume_info_t * info, void *user_data)
+{
+  p4est_quadrant_t   *q = info->quad;
+  double             *vmax = (double *) user_data;
+
+  double v[P4EST_DIM];
+  double x[P4EST_DIM];
+
+  step3_get_midpoint(info->p4est, info->treeid, q, x);
+  determine_velocity(x, v, NULL);
+
+  for(int i = 0; i < P4EST_DIM; i++){
+    vmax[i] = SC_MAX(v[i], vmax[i]);
+  }
+}
+
 /** Compute the timestep.
  *
  * Find the smallest quadrant and scale the timestep based on that length and
@@ -1319,10 +1331,9 @@ step3_get_timestep (p4est_t * p4est)
 
   vnorm = 0;
   for (i = 0; i < P4EST_DIM; i++) {
-    vnorm += ctx->v[i] * ctx->v[i];
+    vnorm += ctx->v_max[i] * ctx->v_max[i];
   }
   vnorm = sqrt (vnorm);
-
   dt = min_h / 2. / vnorm;
 
   return dt;
@@ -1522,17 +1533,10 @@ step3_run (sc_MPI_Comm mpicomm)
   ctx.max_err = 2.e-2;
   ctx.center[0] = 0.5;
   ctx.center[1] = 0.5;
+  ctx.v_max[0] = 1;
+  ctx.v_max[1] = 1;
 #ifdef P4_TO_P8
   ctx.center[2] = 0.5;
-#endif
-#ifndef P4_TO_P8
-  /* randomly chosen advection direction */
-  ctx.v[0] = -0.445868402501118;
-  ctx.v[1] = -0.895098523991131;
-#else
-  ctx.v[0] = 0.485191768970225;
-  ctx.v[1] = -0.427996381877778;
-  ctx.v[2] = 0.762501176669961;
 #endif
   ctx.refine_period = 2;
   ctx.repartition_period = 4;
@@ -1557,6 +1561,26 @@ step3_run (sc_MPI_Comm mpicomm)
                          (void *) (&ctx));              /* context */
   /* *INDENT-ON* */
 
+  double vmax[P4EST_DIM];
+  double global_vmax[P4EST_DIM];
+  for (int i = 0; i < P4EST_DIM; i++) vmax[i] = 0.;
+   
+  /* initialize derivative estimates */
+        p4est_iterate (p4est, NULL, (void *) &vmax,
+                       step3_compute_vmax,       
+                       NULL,    /* there is no callback for the faces between quadrants */
+#ifdef P4_TO_P8
+                       NULL,    /* there is no callback for the edges between quadrants */
+#endif
+                       NULL);   /* there is no callback for the corners between quadrants */
+
+  int mpiret =
+    sc_MPI_Allreduce (&vmax, &global_vmax, P4EST_DIM, sc_MPI_DOUBLE, sc_MPI_MAX,
+                      p4est->mpicomm);
+  SC_CHECK_MPI (mpiret);
+  for(int i = 0; i < P4EST_DIM; i++) ctx.v_max[i] = global_vmax[i];
+  P4EST_GLOBAL_PRODUCTIONF ("v_max %f, %f\n", global_vmax[0], global_vmax[1]);
+
   /* refine and coarsen based on an interpolation error estimate */
   recursive = 1;
   p4est_refine (p4est, recursive, step3_refine_err_estimate,
@@ -1574,9 +1598,8 @@ step3_run (sc_MPI_Comm mpicomm)
    * neighbors across edges or corners as well; see p4est.h. */
   p4est_balance (p4est, P4EST_CONNECT_FACE, step3_init_initial_condition);
   p4est_partition (p4est, partforcoarsen, NULL);
-
   /* time step */
-  step3_timestep (p4est, 0., 1);
+  step3_timestep (p4est, 0., 0.5);
 
   /* Destroy the p4est and the connectivity structure. */
   p4est_destroy (p4est);
