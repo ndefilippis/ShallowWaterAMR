@@ -90,6 +90,8 @@ static int          step3_checkpoint = 0;
 typedef struct step3_data
 {
   double              u;             /**< the state variable */
+  double              x[P4EST_DIM];  // coordinates of midpoint of quadrant 
+  double              v[P4EST_DIM];  // spatially varying velocity
   double              du[P4EST_DIM]; /**< the spatial derivatives */
   double              dudt;          /**< the time derivative */
 }
@@ -131,7 +133,7 @@ step3_ctx_t;
  * \return the initial condition at \a x
  */
 static double
-step3_initial_condition (double x[], double du[], step3_ctx_t * ctx)
+step3_initial_condition (double x[], double x_out[], double du[], double v[], step3_ctx_t * ctx)
 {
   int                 i;
   double             *c = ctx->center;
@@ -153,6 +155,19 @@ step3_initial_condition (double x[], double du[], step3_ctx_t * ctx)
       du[i] = -(1. / bump_width / bump_width) * d[i] * retval;
     }
   }
+
+  // circular flow, u = y, v = -x
+  if(v) {
+    v[0] = x[1];
+    v[1] = -x[0];
+  }
+
+  if(x_out) {
+    for (i = 0; i < P4EST_DIM; i++) {
+      x_out[i] = x[i];
+    }
+  }
+  //printf("%f\n", x_out[0]);
 
   return retval;
 }
@@ -199,7 +214,7 @@ step3_init_initial_condition (p4est_t * p4est, p4est_topidx_t which_tree,
 
   step3_get_midpoint (p4est, which_tree, q, midpoint);
   /* initialize the data */
-  data->u = step3_initial_condition (midpoint, data->du, ctx);
+  data->u = step3_initial_condition (midpoint, data->x, data->du, data->v, ctx);
 }
 
 /** Estimate the square of the approximation error on a quadrant.
@@ -310,7 +325,7 @@ step3_coarsen_initial_condition (p4est_t * p4est,
   /* get the parent of the first child (the parent of all children) */
   p4est_quadrant_parent (children[0], &parent);
   step3_get_midpoint (p4est, which_tree, &parent, parentmidpoint);
-  parentdata.u = step3_initial_condition (parentmidpoint, parentdata.du, ctx);
+  parentdata.u = step3_initial_condition (parentmidpoint, parentdata.x, parentdata.du, parentdata.v, ctx);
   h = (double) P4EST_QUADRANT_LEN (parent.level) / (double) P4EST_ROOT_LEN;
   /* the quadrant's volume is also its volume fraction */
 #ifdef P4_TO_P8
@@ -552,6 +567,7 @@ step3_write_solution (p4est_t * p4est, int timestep)
   char                filename[BUFSIZ] = "";
   int                 retval;
   sc_array_t         *u_interp;
+  sc_array_t         *v_interp;
   p4est_locidx_t      numquads;
   p4est_vtk_context_t *context;
 
@@ -562,6 +578,7 @@ step3_write_solution (p4est_t * p4est, int timestep)
   /* create a vector with one value for the corner of every local quadrant
    * (the number of children is always the same as the number of corners) */
   u_interp = sc_array_new_size (sizeof (double), numquads * P4EST_CHILDREN);
+  v_interp = sc_array_new_size (sizeof (double), 2 * numquads * P4EST_CHILDREN);
 
   /* Use the iterator to visit every cell and fill in the solution values.
    * Using the iterator is not absolutely necessary in this case: we could
@@ -580,7 +597,7 @@ step3_write_solution (p4est_t * p4est, int timestep)
     
     
   // try to add velocity data
-  //p4est_iterate (p4est, NULL, (void *) u_interp, step3_interpolate_velocity, NULL, NULL); 
+  //p4est_iterate (p4est, NULL, (void *) v_interp, step3_interpolate_velocity, NULL, NULL); 
 
   /* create VTK output context and set its parameters */
   context = p4est_vtk_context_new (p4est, filename);
@@ -615,6 +632,7 @@ step3_write_solution (p4est_t * p4est, int timestep)
   SC_CHECK_ABORT (!retval, P4EST_STRING "_vtk: Error writing footer");
 
   sc_array_destroy (u_interp);
+  sc_array_destroy (v_interp);
 }
 
 #ifdef P4EST_ENABLE_FILE_DEPRECATED
@@ -898,6 +916,7 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
 {
   int                 i, j;
   p4est_t            *p4est = info->p4est;
+  //double             *coordinates = info->
   step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
   step3_data_t       *ghost_data = (step3_data_t *) user_data;
   step3_data_t       *udata;
@@ -906,9 +925,11 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   double              uavg;
   double              q;
   double              h, facearea;
+  double              x[3];
   int                 which_face;
   int                 upwindside;
   p4est_iter_face_side_t *side[2];
+  p4est_iter_face_side_t *full_side;
   sc_array_t         *sides = &(info->sides);
 
   /* because there are no boundaries, every face has two sides */
@@ -917,30 +938,31 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   side[0] = p4est_iter_fside_array_index_int (sides, 0);
   side[1] = p4est_iter_fside_array_index_int (sides, 1);
 
-  /* which of the quadrant's faces the interface touches */
+  /* which of the quadrant's faces the interface touches */  
   which_face = side[0]->face;
+
+  full_side = side[0];
+  if(side[0]->is_hanging) full_side = side[1];
+
+  step3_get_midpoint(p4est, full_side->treeid, full_side->is.full.quad, x);
+
+  double u = x[1];
+  //printf("%f\n", x);
+  double v = -x[0];
 
   switch (which_face) {
   case 0:                      /* -x side */
-    vdotn = -ctx->v[0];
+    vdotn = -u;
     break;
   case 1:                      /* +x side */
-    vdotn = ctx->v[0];
+    vdotn = u;
     break;
   case 2:                      /* -y side */
-    vdotn = -ctx->v[1];
+    vdotn = -v;
     break;
   case 3:                      /* +y side */
-    vdotn = ctx->v[1];
+    vdotn = v;
     break;
-#ifdef P4_TO_P8
-  case 4:                      /* -z side */
-    vdotn = -ctx->v[2];
-    break;
-  case 5:                      /* +z side */
-    vdotn = ctx->v[2];
-    break;
-#endif
   }
   upwindside = vdotn >= 0. ? 0 : 1;
 
