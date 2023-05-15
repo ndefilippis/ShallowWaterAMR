@@ -571,7 +571,7 @@ step3_write_solution (p4est_t * p4est, int timestep)
   p4est_locidx_t      numquads;
   p4est_vtk_context_t *context;
 
-  snprintf (filename, BUFSIZ, P4EST_STRING "_step3_%04d", timestep);
+  snprintf (filename, BUFSIZ, "step3_result/" P4EST_STRING "_step3_%04d", timestep);
 
   numquads = p4est->local_num_quadrants;
 
