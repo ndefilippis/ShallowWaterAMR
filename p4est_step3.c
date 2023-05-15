@@ -897,6 +897,22 @@ step3_quad_divergence (p4est_iter_volume_info_t * info, void *user_data)
   
 }
 
+static void determine_velocity(double* x, double* v) {
+  int N = 4;
+  double U[4] = {1, 1, 1, 1};
+  double k1[4] = {0.5, 0, 1, 1};
+  double k2[4] = {0, 0.5, 1, -1};
+  double theta[4] = {0.2, 0.5, 3.1, 1.5};
+
+  v[0] = 0;
+  v[1] = 0;
+  for (int i = 0; i < N; i++) {
+    v[0] +=  U[i]*k1[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
+    v[1] += -U[i]*k2[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
+  }
+  return;
+}
+
 /** Approximate the flux across a boundary between quadrants.
  *
  * We use a very simple upwind numerical flux.
@@ -926,6 +942,7 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   double              q;
   double              h, facearea;
   double              x[3];
+  double              u[2];
   int                 which_face;
   int                 upwindside;
   p4est_iter_face_side_t *side[2];
@@ -938,30 +955,52 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   side[0] = p4est_iter_fside_array_index_int (sides, 0);
   side[1] = p4est_iter_fside_array_index_int (sides, 1);
 
-  /* which of the quadrant's faces the interface touches */  
-  which_face = side[0]->face;
+  
 
   full_side = side[0];
   if(side[0]->is_hanging) full_side = side[1];
 
-  step3_get_midpoint(p4est, full_side->treeid, full_side->is.full.quad, x);
+  quad = full_side->is.full.quad;
+  p4est_qcoord_t length = P4EST_QUADRANT_LEN (quad->level);
+  p4est_qcoord_t dx = 0, dy = 0;
+  which_face = full_side->face;
+  switch(which_face) {
+    case 0:
+      dx = 0;
+      dy = length / 2;
+      break;
+    case 1:
+      dx = length;
+      dy = length / 2;
+      break;
+    case 2:
+      dx = length / 2;
+      dy = 0;
+      break;
+    case 3:
+      dx = length / 2;
+      dy = length;
+      break;
+  }
+  
+  p4est_qcoord_to_vertex (p4est->connectivity, full_side->treeid, quad->x + dx, quad->y + dy, x);
 
-  double u = x[1];
-  //printf("%f\n", x);
-  double v = -x[0];
+  determine_velocity(x, u);
 
+  /* which of the quadrant's faces the interface touches */  
+  which_face = side[0]->face;
   switch (which_face) {
   case 0:                      /* -x side */
-    vdotn = -u;
+    vdotn = -u[0];
     break;
   case 1:                      /* +x side */
-    vdotn = u;
+    vdotn = u[0];
     break;
   case 2:                      /* -y side */
-    vdotn = -v;
+    vdotn = -u[1];
     break;
   case 3:                      /* +y side */
-    vdotn = v;
+    vdotn = u[1];
     break;
   }
   upwindside = vdotn >= 0. ? 0 : 1;
@@ -1537,7 +1576,7 @@ step3_run (sc_MPI_Comm mpicomm)
   p4est_partition (p4est, partforcoarsen, NULL);
 
   /* time step */
-  step3_timestep (p4est, 0., 0.1);
+  step3_timestep (p4est, 0., 1);
 
   /* Destroy the p4est and the connectivity structure. */
   p4est_destroy (p4est);
