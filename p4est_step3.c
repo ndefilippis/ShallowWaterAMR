@@ -37,6 +37,9 @@
  * Most API functions are available for both dimensions.  The header file
  * p4est_to_p8est.h #define's the 2D names to the 3D names such that most code
  * only needs to be written once.  In this example, we rely on this. */
+#define _USE_MATH_DEFINES
+#include <math.h>
+
 #ifndef P4_TO_P8
 #include <p4est_vtk.h>
 #include <p4est_bits.h>
@@ -115,7 +118,6 @@ typedef struct step3_ctx
                                                between repartitioning */
   int                 write_period;       /**< the number of time steps
                                                between writing vtk files */
-  double              v_max[P4EST_DIM];   // maximum velocity found
   double              current_time;       /**< the current time */
   int                 time_step;          /**< current time step
                                                counted from the first start. */
@@ -123,29 +125,28 @@ typedef struct step3_ctx
 step3_ctx_t;
 
 
-static void determine_velocity(double* x, double* v, step3_ctx_t* ctx) {
+static void determine_velocity(double* xy, double* v, step3_ctx_t* ctx) {
   double time = 0;
   if(ctx) {
     time = ctx->current_time;
   }
   int N = 4;
   double U[4] = {1, 1, 1, 1};
-  double k1[4] = {0.5, 0, 1, 1};
-  double k2[4] = {0, 0.5, 1, -1};
-  double theta[4] = {0.2, 0.5, 3.1, 1.5};
-  double multiplier[4] = {1443, 9023, 4354, 34301};
+  double k1[4] = {1, 0.5, 0, 1};
+  double k2[4] = {1, 0, 0.5, -1};
 
-  int time_step = (int) (time * 32);
-  for(int i = 0; i < N; i++) {
-    theta[i] = time_step * multiplier[i] + theta[i];
-  }
+  double a = 2;
+  double km = 1;
 
-  v[0] = 0;
-  v[1] = 0;
-  for (int i = 0; i < N; i++) {
-    v[0] +=  U[i]*k1[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
-    v[1] += -U[i]*k2[i] * sin(k1[i]*x[0] + k2[i]*x[1] + theta[i]);
-  }
+  double x = 2*M_PI*xy[0];
+  double y = 2*M_PI*xy[1];
+
+  v[0] = -U[0]*(sin(km*x)*cos(km*y)-a*cos(km*x)*sin(km*y)) + 0.25;
+  v[1] =  U[0]*(cos(km*x)*sin(km*y)-a*sin(km*x)*cos(km*y)) + 0.25;
+  //for (int i = 0; i < 1; i++) {
+  //  v[0] +=  U[i]*k1[i] * sin(k1[i]*2*M_PI*x[0]);
+  //  v[1] += -U[i]*k2[i] * sin(k1[i]*2*M_PI*x[0]);
+  //}
   return;
 }
 
@@ -928,7 +929,7 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   int                 i, j;
   p4est_t            *p4est = info->p4est;
   //double             *coordinates = info->
-  // step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
+  step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
   step3_data_t       *ghost_data = (step3_data_t *) user_data;
   step3_data_t       *udata;
   p4est_quadrant_t   *quad;
@@ -1110,6 +1111,7 @@ step3_timestep_update (p4est_iter_volume_info_t * info, void *user_data)
 #endif
 
   data->u += dt * data->dudt / vol;
+  //data->u = SC_MIN(data->u, 10);
 }
 
 /** Reset the approximate derivatives.
@@ -1280,20 +1282,30 @@ step3_compute_max (p4est_iter_volume_info_t * info, void *user_data)
 }
 
 static void
-step3_compute_vmax (p4est_iter_volume_info_t * info, void *user_data)
+step3_compute_dt_min (p4est_iter_volume_info_t * info, void *user_data)
 {
+  int                i;
+  p4est_t            *p4est = info->p4est;
   p4est_quadrant_t   *q = info->quad;
-  double             *vmax = (double *) user_data;
+  double             dt_min = *((double *) user_data);
 
   double v[P4EST_DIM];
   double x[P4EST_DIM];
 
-  step3_get_midpoint(info->p4est, info->treeid, q, x);
+  step3_get_midpoint(p4est, info->treeid, q, x);
   determine_velocity(x, v, NULL);
 
-  for(int i = 0; i < P4EST_DIM; i++){
-    vmax[i] = SC_MAX(v[i], vmax[i]);
+  double h_min = (double) P4EST_QUADRANT_LEN (q->level)  / (double) P4EST_ROOT_LEN;
+
+  double vnorm = 0;
+  for (i = 0; i < P4EST_DIM; i++) {
+    vnorm += v[i] * v[i];
   }
+  vnorm = sqrt (vnorm);
+  double dt = h_min / 2. / SC_MAX(1, vnorm);
+  dt_min = SC_MIN(dt, dt_min);
+
+  *((double *) user_data) = dt_min;
 }
 
 /** Compute the timestep.
@@ -1308,39 +1320,29 @@ static double
 step3_get_timestep (p4est_t * p4est)
 {
   step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
-  p4est_topidx_t      t, flt, llt;
   p4est_tree_t       *tree;
   int                 max_level, global_max_level;
   int                 mpiret, i;
-  double              min_h, vnorm;
-  double              dt;
+  double              dt_min;
+  double              global_dt_min;
 
-  /* compute the timestep by finding the smallest quadrant */
-  flt = p4est->first_local_tree;
-  llt = p4est->last_local_tree;
+  dt_min = 1.0 / 0.0;
 
-  max_level = 0;
-  for (t = flt; t <= llt; t++) {
-    tree = p4est_tree_array_index (p4est->trees, t);
-    max_level = SC_MAX (max_level, tree->maxlevel);
+  p4est_iterate (p4est, NULL, (void *) &dt_min,
+                       step3_compute_dt_min,       
+                       NULL,    /* there is no callback for the faces between quadrants */
+#ifdef P4_TO_P8
+                       NULL,    /* there is no callback for the edges between quadrants */
+#endif
+                       NULL);   /* there is no callback for the corners between quadrants */
 
-  }
   mpiret =
-    sc_MPI_Allreduce (&max_level, &global_max_level, 1, sc_MPI_INT,
-                      sc_MPI_MAX, p4est->mpicomm);
+    sc_MPI_Allreduce (&dt_min, &global_dt_min, 1, sc_MPI_DOUBLE, sc_MPI_MAX,
+                      p4est->mpicomm);
   SC_CHECK_MPI (mpiret);
-
-  min_h =
-    (double) P4EST_QUADRANT_LEN (global_max_level) / (double) P4EST_ROOT_LEN;
-
-  vnorm = 0;
-  for (i = 0; i < P4EST_DIM; i++) {
-    vnorm += ctx->v_max[i] * ctx->v_max[i];
-  }
-  vnorm = sqrt (vnorm);
-  dt = min_h / 2. / vnorm;
-
-  return dt;
+  P4EST_GLOBAL_PRODUCTIONF ("time step: %f\n", global_dt_min);
+  
+  return global_dt_min;
 }
 
 /** Timestep the advection problem.
@@ -1537,8 +1539,6 @@ step3_run (sc_MPI_Comm mpicomm)
   ctx.max_err = 2.e-2;
   ctx.center[0] = 0.5;
   ctx.center[1] = 0.5;
-  ctx.v_max[0] = 1;
-  ctx.v_max[1] = 1;
 #ifdef P4_TO_P8
   ctx.center[2] = 0.5;
 #endif
@@ -1565,26 +1565,6 @@ step3_run (sc_MPI_Comm mpicomm)
                          (void *) (&ctx));              /* context */
   /* *INDENT-ON* */
 
-  double vmax[P4EST_DIM];
-  double global_vmax[P4EST_DIM];
-  for (int i = 0; i < P4EST_DIM; i++) vmax[i] = 0.;
-   
-  /* initialize derivative estimates */
-        p4est_iterate (p4est, NULL, (void *) &vmax,
-                       step3_compute_vmax,       
-                       NULL,    /* there is no callback for the faces between quadrants */
-#ifdef P4_TO_P8
-                       NULL,    /* there is no callback for the edges between quadrants */
-#endif
-                       NULL);   /* there is no callback for the corners between quadrants */
-
-  int mpiret =
-    sc_MPI_Allreduce (&vmax, &global_vmax, P4EST_DIM, sc_MPI_DOUBLE, sc_MPI_MAX,
-                      p4est->mpicomm);
-  SC_CHECK_MPI (mpiret);
-  for(int i = 0; i < P4EST_DIM; i++) ctx.v_max[i] = global_vmax[i];
-  P4EST_GLOBAL_PRODUCTIONF ("v_max %f, %f\n", global_vmax[0], global_vmax[1]);
-
   /* refine and coarsen based on an interpolation error estimate */
   recursive = 1;
   p4est_refine (p4est, recursive, step3_refine_err_estimate,
@@ -1603,7 +1583,7 @@ step3_run (sc_MPI_Comm mpicomm)
   p4est_balance (p4est, P4EST_CONNECT_FACE, step3_init_initial_condition);
   p4est_partition (p4est, partforcoarsen, NULL);
   /* time step */
-  step3_timestep (p4est, 0., 0.5);
+  step3_timestep (p4est, 0., 15.);
 
   /* Destroy the p4est and the connectivity structure. */
   p4est_destroy (p4est);
