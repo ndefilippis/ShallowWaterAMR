@@ -1443,7 +1443,7 @@ step3_run (sc_MPI_Comm mpicomm)
   memset (&ctx, -1, sizeof (ctx));
 
   ctx.bump_width = 0.1;
-  ctx.max_err = 2.e-2;
+  ctx.max_err = 2.e-3;
   ctx.center[0] = 0.5;
   ctx.center[1] = 0.5;
 #ifdef P4_TO_P8
@@ -1525,16 +1525,6 @@ main (int argc, char **argv)
   SC_CHECK_MPI (mpiret);
   mpicomm = sc_MPI_COMM_WORLD;
 
-  ///////////////////////
-  int rank;
-  int msize;
-  MPI_Comm_rank(mpicomm, &rank);
-  MPI_Comm_size(mpicomm, &msize);
-
-  MPI_Barrier(mpicomm);
-  double tt = MPI_Wtime();
-  ///////////////////////
-
   /* These functions are optional.  If called they store the MPI rank as a
    * static variable so subsequent global p4est log messages are only issued
    * from processor zero.  Here we turn off most of the logging; see sc.h. */
@@ -1574,19 +1564,6 @@ main (int argc, char **argv)
 
   /* End of program -- free allocated memory */
   sc_options_destroy (opt);
-
-  double elapsed = MPI_Wtime() - tt;
-
-  ///////////////////
-  MPI_Barrier(mpicomm);
-  if (0 == rank) {
-    printf("Time elapsed is %f seconds.\n", elapsed);
-  }
-  char name[MPI_MAX_PROCESSOR_NAME];
-  int len;
-  MPI_Get_processor_name(name, &len);
-  printf("Node number %d/%d is %s\n", rank, msize, name);
-  /////////////////
 
   /* Verify that allocations internal to p4est and sc do not leak memory.
    * This should be called if sc_init () has been called earlier. */

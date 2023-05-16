@@ -1531,7 +1531,7 @@ main (int argc, char **argv)
   MPI_Comm_rank(mpicomm, &rank);
   MPI_Comm_size(mpicomm, &msize);
 
-  MPI_Barrier(mpicomm);
+  MPI_Barrier(comm);
   double tt = MPI_Wtime();
   ///////////////////////
 
@@ -1575,18 +1575,14 @@ main (int argc, char **argv)
   /* End of program -- free allocated memory */
   sc_options_destroy (opt);
 
-  double elapsed = MPI_Wtime() - tt;
+  tt = MPI_Wtime() - tt;
 
   ///////////////////
-  MPI_Barrier(mpicomm);
-  if (0 == rank) {
+  MPI_Barrier(comm);
+  if (0 == mpirank) {
     printf("Time elapsed is %f seconds.\n", elapsed);
   }
-  char name[MPI_MAX_PROCESSOR_NAME];
-  int len;
-  MPI_Get_processor_name(name, &len);
   printf("Node number %d/%d is %s\n", rank, msize, name);
-  /////////////////
 
   /* Verify that allocations internal to p4est and sc do not leak memory.
    * This should be called if sc_init () has been called earlier. */

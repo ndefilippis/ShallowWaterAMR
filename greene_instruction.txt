@@ -2,10 +2,12 @@ srun --nodes=1 --tasks-per-node=4 --cpus-per-task=1 --time=2:00:00 --mem=4GB --p
 
 module load openmpi/intel/4.1.1
 
-./configure CFLAGS="-Wall -O3 -g" --enable-mpi --prefix=/scratch/sd3201/ShallowWaterAMR
+./configure CFLAGS="-O3 -g" --enable-mpi --prefix=/scratch/sd3201/ShallowWaterAMR
+make -j8 V=0
+make -j10 install V=0
 
 
-scp p4est_step3.c sd3201@dtn.hpc.nyu.edu:/scratch/sd3201/p4est-2.8.5.5-9ddbb/example/step
+scp p4est_step3.c sd3201@dtn.hpc.nyu.edu:/scratch/sd3201/p4est-2.8.5.5-9ddbb/example/steps
 
 
 cd /scratch/sd3201/p4est-2.8.5.5-9ddbb/
