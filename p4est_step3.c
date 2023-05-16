@@ -131,9 +131,9 @@ static void determine_velocity(double* xy, double* v, step3_ctx_t* ctx) {
     time = ctx->current_time;
   }
   int N = 4;
-  double U[4] = {10, 1, 1, 1};
-  double k1[4] = {1, 0.5, 0, 1};
-  double k2[4] = {1, 0, 0.5, -1};
+  double U[4] = {2., 1., 1., 1.};
+  double k1[4] = {1., 0.5, 0, 1.};
+  double k2[4] = {1., 0., 0.5, -1.};
 
   double a = 0.25;
   double km = 1;
@@ -142,12 +142,12 @@ static void determine_velocity(double* xy, double* v, step3_ctx_t* ctx) {
   double y = 2*M_PI*xy[1];
 
 
-  //v[0] = 0.5;
-  //v[1] = 0.5;
+  v[0] = -0.5;
+  v[1] = -0.5;
   //v[0] = -U[0]*cos(km * x) + 0.3;
   //v[1] = 0.05;
-  v[0] = -U[0]*(sin(km*x)*cos(km*y)-a*cos(km*x)*sin(km*y)) + 0.25;
-  v[1] =  U[0]*(cos(km*x)*sin(km*y)-a*sin(km*x)*cos(km*y)) + 0.25;
+  //v[0] = -U[0]*(sin(km*x)*cos(km*y)-a*cos(km*x)*sin(km*y));
+  //v[1] =  U[0]*(cos(km*x)*sin(km*y)-a*sin(km*x)*cos(km*y));
   //for (int i = 0; i < 1; i++) {
   //  v[0] +=  U[i]*k1[i] * sin(k1[i]*2*M_PI*x[0]);
   //  v[1] += -U[i]*k2[i] * sin(k1[i]*2*M_PI*x[0]);
@@ -905,8 +905,8 @@ step3_quad_divergence (p4est_iter_volume_info_t * info, void *user_data)
 {
   p4est_quadrant_t   *q = info->quad;
   step3_data_t       *data = (step3_data_t *) q->p.user_data;
-  double user_gamma                 = 0.02; //user defined growth rate
-  double user_nu                    = 0.015; //user defined death rate
+  double user_gamma                 = 0.00; //user defined growth rate
+  double user_nu                    = 0.00; //user defined death rate
 
   data->dudt  = 0.; //user note: does this need to be initialized to 0??
   data->dudt += user_gamma*fabs(data->u); // add growth to dudt
@@ -1087,11 +1087,11 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
       }
     }
   }
-  if(fabs(total_flux_out) > 1e-9){
+  /*if(fabs(total_flux_out) > 1e-9){
     printf("%f\n", total_flux_out);
     printf("%d,%d\n", side[0]->is_hanging, side[1]->is_hanging);
     exit(1);
-  }
+  }*/
 }
 
 /** Compute the new value of the state from the computed time derivative.
