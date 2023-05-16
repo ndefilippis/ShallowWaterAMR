@@ -131,16 +131,21 @@ static void determine_velocity(double* xy, double* v, step3_ctx_t* ctx) {
     time = ctx->current_time;
   }
   int N = 4;
-  double U[4] = {1, 1, 1, 1};
+  double U[4] = {10, 1, 1, 1};
   double k1[4] = {1, 0.5, 0, 1};
   double k2[4] = {1, 0, 0.5, -1};
 
-  double a = 2;
+  double a = 0.25;
   double km = 1;
 
   double x = 2*M_PI*xy[0];
   double y = 2*M_PI*xy[1];
 
+
+  //v[0] = 0.5;
+  //v[1] = 0.5;
+  //v[0] = -U[0]*cos(km * x) + 0.3;
+  //v[1] = 0.05;
   v[0] = -U[0]*(sin(km*x)*cos(km*y)-a*cos(km*x)*sin(km*y)) + 0.25;
   v[1] =  U[0]*(cos(km*x)*sin(km*y)-a*sin(km*x)*cos(km*y)) + 0.25;
   //for (int i = 0; i < 1; i++) {
@@ -904,7 +909,7 @@ step3_quad_divergence (p4est_iter_volume_info_t * info, void *user_data)
   double user_nu                    = 0.015; //user defined death rate
 
   data->dudt  = 0.; //user note: does this need to be initialized to 0??
-  data->dudt += user_gamma*abs(data->u); // add growth to dudt
+  data->dudt += user_gamma*fabs(data->u); // add growth to dudt
   data->dudt += -1.0*user_nu*(data->u)*(data->u); // remove death
   
 }
@@ -944,6 +949,9 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   p4est_iter_face_side_t *side[2];
   p4est_iter_face_side_t *full_side;
   sc_array_t         *sides = &(info->sides);
+
+  double total_flux_out = 0;
+  double total_flux_in = 0;
 
   /* because there are no boundaries, every face has two sides */
   P4EST_ASSERT (sides->elem_count == 2);
@@ -1030,7 +1038,7 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
   }
   else {
     if (side[upwindside]->is.full.is_ghost) {
-      udata = (step3_data_t *) & ghost_data[side[upwindside]->is.full.quadid];
+      udata = (step3_data_t *) &ghost_data[side[upwindside]->is.full.quadid];
     }
     else {
       udata = (step3_data_t *) side[upwindside]->is.full.quad->p.user_data;
@@ -1055,9 +1063,11 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
           udata = (step3_data_t *) quad->p.user_data;
           if (i == upwindside) {
             udata->dudt += vdotn * udata->u * facearea * (i ? 1. : -1.);
+            total_flux_out += vdotn * udata->u * facearea * (i ? 1. : -1.);
           }
           else {
             udata->dudt += q * facearea * (i ? 1. : -1.);
+            total_flux_out += q * facearea * (i ? 1. : -1.);
           }
         }
       }
@@ -1073,8 +1083,14 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
       if (!side[i]->is.full.is_ghost) {
         udata = (step3_data_t *) quad->p.user_data;
         udata->dudt += q * facearea * (i ? 1. : -1.);
+        total_flux_out += q * facearea * (i ? 1. : -1.);
       }
     }
+  }
+  if(fabs(total_flux_out) > 1e-9){
+    printf("%f\n", total_flux_out);
+    printf("%d,%d\n", side[0]->is_hanging, side[1]->is_hanging);
+    exit(1);
   }
 }
 
@@ -1299,10 +1315,10 @@ step3_compute_dt_min (p4est_iter_volume_info_t * info, void *user_data)
 
   double vnorm = 0;
   for (i = 0; i < P4EST_DIM; i++) {
-    vnorm += v[i] * v[i];
+    vnorm += fabs(v[i]);
   }
-  vnorm = sqrt (vnorm);
-  double dt = h_min / 2. / SC_MAX(1, vnorm);
+
+  double dt = h_min / 2. / vnorm;
   dt_min = SC_MIN(dt, dt_min);
 
   *((double *) user_data) = dt_min;
@@ -1583,7 +1599,7 @@ step3_run (sc_MPI_Comm mpicomm)
   p4est_balance (p4est, P4EST_CONNECT_FACE, step3_init_initial_condition);
   p4est_partition (p4est, partforcoarsen, NULL);
   /* time step */
-  step3_timestep (p4est, 0., 15.);
+  step3_timestep (p4est, 0., 11.5);
 
   /* Destroy the p4est and the connectivity structure. */
   p4est_destroy (p4est);
