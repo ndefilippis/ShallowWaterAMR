@@ -791,7 +791,7 @@ step3_write_solution (p4est_t * p4est, int timestep)
                   P4EST_STRING "_vtk: Error writing cell data");
 
   /* write one scalar field: the solution value */
-  context = p4est_vtk_write_point_dataf (context, 1, 0, /* write no vector fields */
+  context = p4est_vtk_write_point_dataf (context, 3, 0, /* write no vector fields */
                                          "plankton", u_interp,
                                          "zooplankton", u2_interp,
                                          "nutrients", u3_interp,
@@ -806,6 +806,8 @@ step3_write_solution (p4est_t * p4est, int timestep)
   SC_CHECK_ABORT (!retval, P4EST_STRING "_vtk: Error writing footer");
 
   sc_array_destroy (u_interp);
+  sc_array_destroy (u2_interp);
+  sc_array_destroy (u3_interp);
   sc_array_destroy (v_interp);
 }
 
