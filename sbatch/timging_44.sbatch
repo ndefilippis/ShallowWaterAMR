@@ -4,7 +4,7 @@
 #SBATCH --nodes=4
 #SBATCH --tasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4GB 
+#SBATCH --mem=16GB 
 #SBATCH --time=01:00:00 
 #SBATCH --verbose
 
