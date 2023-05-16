@@ -1298,6 +1298,24 @@ step3_compute_max (p4est_iter_volume_info_t * info, void *user_data)
 }
 
 static void
+step3_total_u (p4est_iter_volume_info_t * info, void *user_data)
+{
+  int                i;
+  p4est_t            *p4est = info->p4est;
+  p4est_quadrant_t   *q = info->quad;
+  step3_data_t       *data = (step3_data_t *) q->p.user_data;
+  double             total_u = *((double *) user_data);
+
+
+  double h = (double) P4EST_QUADRANT_LEN (q->level)  / (double) P4EST_ROOT_LEN;
+  double vol = h * h;
+
+  total_u += data->u * vol;
+
+  *((double *) user_data) = total_u;
+}
+
+static void
 step3_compute_dt_min (p4est_iter_volume_info_t * info, void *user_data)
 {
   int                i;
@@ -1488,6 +1506,8 @@ step3_timestep (p4est_t * p4est, double start_time, double end_time)
                                              corners between quadrants */
     /* *INDENT-ON* */
 
+    p4est_ghost_exchange_data (p4est, ghost, ghost_data);
+
     /* update u */
     p4est_iterate (p4est, NULL, /* ghosts are not needed for this loop */
                    (void *) &dt,        /* pass in dt */
@@ -1500,6 +1520,23 @@ step3_timestep (p4est_t * p4est, double start_time, double end_time)
 
     /* synchronize the ghost data */
     p4est_ghost_exchange_data (p4est, ghost, ghost_data);
+
+    double total_u = 0;
+    double global_total_u;
+    p4est_iterate (p4est, NULL, /* ghosts are not needed for this loop */
+                   (void *) &total_u,        /* pass in dt */
+                   step3_total_u,       /* update each cell */
+                   NULL,        /* there is no callback for the faces between quadrants */
+#ifdef P4_TO_P8
+                   NULL,        /* there is no callback for the edges between quadrants */
+#endif
+                   NULL);       /* there is no callback for the corners between quadrants */
+    mpiret =
+    sc_MPI_Allreduce (&total_u, &global_total_u, 1, sc_MPI_DOUBLE, sc_MPI_MAX,
+                      p4est->mpicomm);
+  SC_CHECK_MPI (mpiret);
+  P4EST_GLOBAL_PRODUCTIONF ("total u: %f\n", global_total_u);
+    
 
     /* update du/dx estimate */
     p4est_iterate (p4est, ghost, (void *) ghost_data,   /* pass in ghost data that we just exchanged */
@@ -1552,7 +1589,7 @@ step3_run (sc_MPI_Comm mpicomm)
   memset (&ctx, -1, sizeof (ctx));
 
   ctx.bump_width = 0.1;
-  ctx.max_err = 2.e-2;
+  ctx.max_err = 1.e-2;
   ctx.center[0] = 0.5;
   ctx.center[1] = 0.5;
 #ifdef P4_TO_P8
