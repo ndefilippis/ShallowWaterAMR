@@ -527,7 +527,7 @@ step3_replace_quads (p4est_t * p4est, p4est_topidx_t which_tree,
           }
         }
         else {
-          parent_data->du2[j] = du_est;
+          parent_data->du2[j] = du2_est;
         }
         
         if (du3_old == du3_old) {                                // THRICE
@@ -700,7 +700,7 @@ step3_interpolate_solution3 (p4est_iter_volume_info_t * info, void *user_data)
        * are in z-order.  If i is an odd number, it is on the +x side; if it
        * is even, it is on the -x side.  If (i / 2) is an odd number, it is on
        * the +y side, etc. */
-      this_u += (h / 2) * data->du[j] * ((i & (1 << j)) ? 1. : -1.);
+      this_u += (h / 2) * data->du3[j] * ((i & (1 << j)) ? 1. : -1.);
     }
     this_u_ptr = (double *) sc_array_index (u3_interp, arrayoffset + i);
     this_u_ptr[0] = this_u;
@@ -1066,11 +1066,11 @@ step3_quad_divergence (p4est_iter_volume_info_t * info, void *user_data)
 {
   p4est_quadrant_t   *q = info->quad;
   step3_data_t       *data = (step3_data_t *) q->p.user_data;
-  double user_gamma                 = 0.02; //user defined growth rate
-  double user_nu                    = 0.015; //user defined death rate
+  double user_gamma                 = 1; //user defined growth rate
+  double user_nu                    = 3; //user defined death rate
   double user_mu                    = 1;    // nutrient uptake rate
   double user_k                     = 0.5;    // nutrient max uptake loc.
-  double user_tau                   = 0.1;    // nutrient restore timescale
+  double user_tau                   = 1;    // nutrient restore timescale
   double user_star                  = 10;   // nutrient restore value
 
   data->du2dt  = 0.; //user note: does this need to be initialized to 0??
