@@ -1069,17 +1069,17 @@ step3_quad_divergence (p4est_iter_volume_info_t * info, void *user_data)
   double user_gamma                 = 0.02; //user defined growth rate
   double user_nu                    = 0.015; //user defined death rate
   double user_mu                    = 1;    // nutrient uptake rate
-  double user_k                     = 5;    // nutrient max uptake loc.
-  double user_tau                   = 1;    // nutrient restore timescale
+  double user_k                     = 0.5;    // nutrient max uptake loc.
+  double user_tau                   = 0.1;    // nutrient restore timescale
   double user_star                  = 10;   // nutrient restore value
 
   data->du2dt  = 0.; //user note: does this need to be initialized to 0??
-  data->du2dt += user_gamma*abs(data->u2)*(data->u); // z grow
+  data->du2dt += user_gamma*abs((data->u2)*(data->u)); // z grow
   data->du2dt += -1.0*user_nu*(data->u2)*(data->u2); // z die
   
   data->dudt  = 0.;
-  data->dudt += user_mu*(data->u3)*(data->u)/((data->u3)+user_k);// p grow
-  data->dudt += -1.0*user_gamma*abs(data->u2)*(data->u); // p die
+  data->dudt += user_mu*(data->u3)*abs(data->u)/((data->u3)+user_k);// p grow
+  data->dudt += -1.0*user_gamma*abs((data->u2)*(data->u)); // p die
   
   data->du3dt  = 0.;
   data->du3dt += ((data->u3)-user_star)/user_tau; // n grow
