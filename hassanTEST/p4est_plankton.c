@@ -167,7 +167,7 @@ static void determine_velocity(double* x, double* v, step3_ctx_t* ctx) {
  */
 static double
 step3_initial_condition (double x[], double du[], double du2[], double du3[],
-                         dstep3_ctx_t * ctx)
+                         step3_ctx_t * ctx)
 {
   int                 i;
   double             *c = ctx->center;
@@ -350,7 +350,9 @@ step3_coarsen_initial_condition (p4est_t * p4est,
   /* get the parent of the first child (the parent of all children) */
   p4est_quadrant_parent (children[0], &parent);
   step3_get_midpoint (p4est, which_tree, &parent, parentmidpoint);
-  parentdata.u = step3_initial_condition (parentmidpoint, parentdata.du, ctx);
+  parentdata.u = step3_initial_condition (parentmidpoint, parentdata.du,
+                                          parentdata.du2,
+                                          parentdata.du3, ctx);
   h = (double) P4EST_QUADRANT_LEN (parent.level) / (double) P4EST_ROOT_LEN;
   /* the quadrant's volume is also its volume fraction */
 #ifdef P4_TO_P8
@@ -472,6 +474,8 @@ step3_replace_quads (p4est_t * p4est, p4est_topidx_t which_tree,
   int                 i, j;
   double              h;
   double              du_old, du_est;
+  double              du2_old, du2_est; // twice
+  double              du3_old, du3_est; // thrice
 
   if (num_outgoing > 1) {
     /* this is coarsening */
@@ -715,6 +719,8 @@ step3_write_solution (p4est_t * p4est, int timestep)
   char                filename[BUFSIZ] = "";
   int                 retval;
   sc_array_t         *u_interp;
+  sc_array_t         *u2_interp;
+  sc_array_t         *u3_interp;
   sc_array_t         *v_interp;
   p4est_locidx_t      numquads;
   p4est_vtk_context_t *context;
@@ -1070,12 +1076,12 @@ step3_quad_divergence (p4est_iter_volume_info_t * info, void *user_data)
   data->du2dt += -1.0*user_nu*(data->u2)*(data->u2); // z die
   
   data->dudt  = 0.;
-  data->dudt += user_mu*(data->u3)*(data->u)/((data->u3)+user_k)// p grow
+  data->dudt += user_mu*(data->u3)*(data->u)/((data->u3)+user_k);// p grow
   data->dudt += -1.0*user_gamma*abs(data->u2)*(data->u); // p die
   
   data->du3dt  = 0.;
   data->du3dt += ((data->u3)-user_star)/user_tau; // n grow
-  data->du3dt += -1.*user_mu*(data->u3)*(data->u)/((data->u3)+user_k) // n die
+  data->du3dt += -1.*user_mu*(data->u3)*(data->u)/((data->u3)+user_k); // n die
   
 }
 
@@ -1098,14 +1104,13 @@ step3_upwind_flux (p4est_iter_face_info_t * info, void *user_data)
 {
   int                 i, j;
   p4est_t            *p4est = info->p4est;
-  //double             *coordinates = info->
-  // step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
+  step3_ctx_t        *ctx = (step3_ctx_t *) p4est->user_pointer;
   step3_data_t       *ghost_data = (step3_data_t *) user_data;
   step3_data_t       *udata;
   p4est_quadrant_t   *quad;
   double              vdotn = 0.;
-  double              uavg;
-  double              q;
+  double              uavg, uavg2, uavg3;
+  double              q, q2, q3;
   double              h, facearea;
   double              x[3];
   double              u[2];
