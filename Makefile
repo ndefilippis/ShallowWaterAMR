@@ -6,7 +6,9 @@ CPPFLAGS = $(P4EST_CPPFLAGS)
 LDFLAGS = $(P4EST_LDFLAGS)
 LOADLIBES = $(P4EST_LIBS)
 
-p4est_step3: p4est_step3.o
+TARGETS = $(basename $(wildcard *.c))
+
+all : $(TARGETS)
 
 .PHONY: clean
 
